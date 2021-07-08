@@ -9,6 +9,10 @@ from skimage.morphology import disk
 from sklearn.cluster import KMeans
 from skimage import exposure
 
+from scipy.ndimage.morphology import binary_dilation
+from skimage.measure import find_contours
+from skimage.draw import polygon
+
 import matplotlib.pyplot as plt
 
 
@@ -46,6 +50,67 @@ def getIntensityThresholdOtsu(s, params):
         logging.warning(f"{s['filename']} - After LightDarkModule.getIntensityThresholdOtsu:{name} NO tissue remains "
                         f"detectable! Downstream modules likely to be incorrect/fail")
         s["warnings"].append(f"After LightDarkModule.getIntensityThresholdOtsu:{name} NO tissue remains detectable! "
+                             f"Downstream modules likely to be incorrect/fail")
+
+    return
+
+def contourToMask(contour, image):
+    mask = np.zeros(image.shape)
+    rr, cc = polygon(contour[:, 0], contour[:, 1], mask.shape)
+    mask[rr, cc] = 1
+    return mask
+
+def getIntensityThresholdContours(s, params):
+    logging.info(f"{s['filename']} - \tLightDarkModule.getIntensityThresholdContours")
+    name = params.get("name", "classTask")
+    # radius of element to use in dilation
+    radius = float(params.get("radius", 3))
+    # number of iterations to apply in dilation
+    iterations = int(params.get("iterations", 3))
+    # minimum fractional area of (filled) regions/contours to keep in mask (0.1 = 10%)
+    min_fractional_area = float(params.get("min_fractional_area", 0.1))
+    selem = disk(radius)
+
+    # this is applied to mask from previous step!
+    img = s["img_mask_use"]
+    img = color.rgb2gray(img)
+
+    # dilate the mask to smooth / close small openings 
+    dilated_img = binary_dilation(img, structure=selem, iterations=iterations)
+
+    # calculate the contours
+    contours = find_contours(dilated_img, 0.5)
+
+    # calculate masks from the contours (i.e., filled regions)
+    masks = [contourToMask(contour, dilated_img) for contour in contours]
+
+    # only keep "large" masks abouve user-specified threshold
+    max_area = dilated_img.shape[0] * dilated_img.shape[1]
+    threshold_area = min_fractional_area * max_area
+    # np.sum(mask) = area of mask
+    large_masks = [mask for mask in masks if np.sum(mask) > threshold_area]
+
+    # take the union of the masks
+    map = np.logical_or.reduce(large_masks)
+    
+    s["img_mask_" + name] = map > 0
+    if strtobool(params.get("invert", "False")):
+        s["img_mask_" + name] = ~s["img_mask_" + name]
+
+    io.imsave(s["outdir"] + os.sep + s["filename"] + "_" + name + ".png", img_as_ubyte(s["img_mask_" + name]))
+
+    prev_mask = s["img_mask_use"]
+    # note that this mask _replaces_ the previous mask, it isn't logically and'ed to it as
+    # in most modules
+    s["img_mask_use"] = s["img_mask_" + name]
+
+    s.addToPrintList(name,
+                     printMaskHelper(params.get("mask_statistics", s["mask_statistics"]), prev_mask, s["img_mask_use"]))
+
+    if len(s["img_mask_use"].nonzero()[0]) == 0:  # add warning in case the final tissue is empty
+        logging.warning(f"{s['filename']} - After LightDarkModule.getIntensityThresholdContours:{name} NO tissue remains "
+                        f"detectable! Downstream modules likely to be incorrect/fail")
+        s["warnings"].append(f"After LightDarkModule.getIntensityThresholdContours:{name} NO tissue remains detectable! "
                              f"Downstream modules likely to be incorrect/fail")
 
     return

@@ -111,6 +111,7 @@ var DEFAULT_IMAGE_EXTENSIONS = [
     "_small_fill.png",
     "_small_remove.png",
     "_spur.png",
+    "_contour.png",
     "_otsu.png",
     "_otsulocal.png"
 ];
